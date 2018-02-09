@@ -28,12 +28,13 @@ import ReactNativeFiberRenderer from './ReactNativeFiberRenderer';
 import ReactNativePropRegistry from './ReactNativePropRegistry';
 import {getInspectorDataForViewTag} from './ReactNativeFiberInspector';
 import createReactNativeComponentClass from './createReactNativeComponentClass';
+import {injectFindHostInstance} from './findNodeHandle';
 import findNumericNodeHandle from './findNumericNodeHandle';
 import takeSnapshot from './takeSnapshot';
 
-ReactGenericBatching.injection.injectFiberBatchedUpdates(
-  ReactNativeFiberRenderer.batchedUpdates,
-);
+injectFindHostInstance(ReactNativeFiberRenderer.findHostInstance);
+
+ReactGenericBatching.injection.injectRenderer(ReactNativeFiberRenderer);
 
 const roots = new Map();
 

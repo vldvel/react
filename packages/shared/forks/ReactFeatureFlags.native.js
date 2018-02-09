@@ -13,10 +13,13 @@ import typeof * as FeatureFlagsType from 'shared/ReactFeatureFlags';
 import typeof * as FeatureFlagsShimType from './ReactFeatureFlags.native';
 
 // Re-export dynamic flags from the fbsource version.
-export const {debugRenderPhaseSideEffects} = require('ReactFeatureFlags');
+export const {
+  debugRenderPhaseSideEffects,
+  debugRenderPhaseSideEffectsForStrictMode,
+  warnAboutDeprecatedLifecycles,
+} = require('ReactFeatureFlags');
 
 // The rest of the flags are static for better dead code elimination.
-export const enableAsyncSubtreeAPI = true;
 export const enableCreateRoot = false;
 export const enableUserTimingAPI = __DEV__;
 export const enableMutatingReconciler = true;

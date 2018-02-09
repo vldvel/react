@@ -8,22 +8,33 @@
  */
 
 import type {ReactElement} from 'shared/ReactElementType';
+import type {
+  ReactProvider,
+  ReactConsumer,
+  ReactContext,
+} from 'shared/ReactTypes';
 
 import React from 'react';
 import emptyFunction from 'fbjs/lib/emptyFunction';
 import emptyObject from 'fbjs/lib/emptyObject';
 import hyphenateStyleName from 'fbjs/lib/hyphenateStyleName';
 import invariant from 'fbjs/lib/invariant';
+import lowPriorityWarning from 'shared/lowPriorityWarning';
 import memoizeStringOnly from 'fbjs/lib/memoizeStringOnly';
 import warning from 'fbjs/lib/warning';
 import checkPropTypes from 'prop-types/checkPropTypes';
 import describeComponentFrame from 'shared/describeComponentFrame';
 import {ReactDebugCurrentFrame} from 'shared/ReactGlobalSharedState';
+import {warnAboutDeprecatedLifecycles} from 'shared/ReactFeatureFlags';
 import {
   REACT_FRAGMENT_TYPE,
+  REACT_STRICT_MODE_TYPE,
+  REACT_ASYNC_MODE_TYPE,
   REACT_CALL_TYPE,
   REACT_RETURN_TYPE,
   REACT_PORTAL_TYPE,
+  REACT_PROVIDER_TYPE,
+  REACT_CONTEXT_TYPE,
 } from 'shared/ReactSymbols';
 
 import {
@@ -123,6 +134,9 @@ let didWarnDefaultTextareaValue = false;
 let didWarnInvalidOptionChildren = false;
 const didWarnAboutNoopUpdateForComponent = {};
 const didWarnAboutBadClass = {};
+const didWarnAboutDeprecatedWillMount = {};
+const didWarnAboutUndefinedDerivedState = {};
+const didWarnAboutUninitializedState = {};
 const valuePropNames = ['value', 'defaultValue'];
 const newlineEatingTags = {
   listing: true,
@@ -188,7 +202,7 @@ function warnNoop(
     const constructor = publicInstance.constructor;
     const componentName =
       (constructor && getComponentName(constructor)) || 'ReactClass';
-    const warningKey = `${componentName}.${callerName}`;
+    const warningKey = componentName + '.' + callerName;
     if (didWarnAboutNoopUpdateForComponent[warningKey]) {
       return;
     }
@@ -421,6 +435,49 @@ function resolve(
 
     if (shouldConstruct(Component)) {
       inst = new Component(element.props, publicContext, updater);
+
+      if (typeof Component.getDerivedStateFromProps === 'function') {
+        if (__DEV__) {
+          if (inst.state === null || inst.state === undefined) {
+            const componentName = getComponentName(Component) || 'Unknown';
+            if (!didWarnAboutUninitializedState[componentName]) {
+              warning(
+                false,
+                '%s: Did not properly initialize state during construction. ' +
+                  'Expected state to be an object, but it was %s.',
+                componentName,
+                inst.state === null ? 'null' : 'undefined',
+              );
+              didWarnAboutUninitializedState[componentName] = true;
+            }
+          }
+        }
+
+        partialState = Component.getDerivedStateFromProps.call(
+          null,
+          element.props,
+          inst.state,
+        );
+
+        if (__DEV__) {
+          if (partialState === undefined) {
+            const componentName = getComponentName(Component) || 'Unknown';
+            if (!didWarnAboutUndefinedDerivedState[componentName]) {
+              warning(
+                false,
+                '%s.getDerivedStateFromProps(): A valid state object (or null) must be returned. ' +
+                  'You have returned undefined.',
+                componentName,
+              );
+              didWarnAboutUndefinedDerivedState[componentName] = true;
+            }
+          }
+        }
+
+        if (partialState != null) {
+          inst.state = Object.assign({}, inst.state, partialState);
+        }
+      }
     } else {
       if (__DEV__) {
         if (
@@ -457,8 +514,49 @@ function resolve(
     if (initialState === undefined) {
       inst.state = initialState = null;
     }
-    if (inst.componentWillMount) {
-      inst.componentWillMount();
+    if (
+      typeof inst.UNSAFE_componentWillMount === 'function' ||
+      typeof inst.componentWillMount === 'function'
+    ) {
+      if (typeof inst.componentWillMount === 'function') {
+        if (__DEV__) {
+          if (
+            warnAboutDeprecatedLifecycles &&
+            inst.componentWillMount.__suppressDeprecationWarning !== true
+          ) {
+            const componentName = getComponentName(Component) || 'Unknown';
+
+            if (!didWarnAboutDeprecatedWillMount[componentName]) {
+              lowPriorityWarning(
+                false,
+                '%s: componentWillMount() is deprecated and will be ' +
+                  'removed in the next major version. Read about the motivations ' +
+                  'behind this change: ' +
+                  'https://fb.me/react-async-component-lifecycle-hooks' +
+                  '\n\n' +
+                  'As a temporary workaround, you can rename to ' +
+                  'UNSAFE_componentWillMount instead.',
+                componentName,
+              );
+              didWarnAboutDeprecatedWillMount[componentName] = true;
+            }
+          }
+        }
+
+        // In order to support react-lifecycles-compat polyfilled components,
+        // Unsafe lifecycles should not be invoked for any component with the new gDSFP.
+        if (typeof Component.getDerivedStateFromProps !== 'function') {
+          inst.componentWillMount();
+        }
+      }
+      if (
+        typeof inst.UNSAFE_componentWillMount === 'function' &&
+        typeof Component.getDerivedStateFromProps !== 'function'
+      ) {
+        // In order to support react-lifecycles-compat polyfilled components,
+        // Unsafe lifecycles should not be invoked for any component with the new gDSFP.
+        inst.UNSAFE_componentWillMount();
+      }
       if (queue.length) {
         oldQueue = queue;
         oldReplace = replace;
@@ -476,7 +574,7 @@ function resolve(
               typeof partial === 'function'
                 ? partial.call(inst, nextState, element.props, publicContext)
                 : partial;
-            if (partialState) {
+            if (partialState != null) {
               if (dontMutate) {
                 dontMutate = false;
                 nextState = Object.assign({}, nextState, partialState);
@@ -531,6 +629,7 @@ function resolve(
 }
 
 type Frame = {
+  type: mixed,
   domNamespace: string,
   children: FlatReactChildren,
   childIndex: number,
@@ -550,10 +649,14 @@ class ReactDOMServerRenderer {
   previousWasTextNode: boolean;
   makeStaticMarkup: boolean;
 
+  providerStack: Array<?ReactProvider<any>>;
+  providerIndex: number;
+
   constructor(children: mixed, makeStaticMarkup: boolean) {
     const flatChildren = flattenTopLevelChildren(children);
 
     const topFrame: Frame = {
+      type: null,
       // Assume all trees start in the HTML namespace (not totally true, but
       // this is what we did historically)
       domNamespace: Namespaces.html,
@@ -570,6 +673,39 @@ class ReactDOMServerRenderer {
     this.currentSelectValue = null;
     this.previousWasTextNode = false;
     this.makeStaticMarkup = makeStaticMarkup;
+
+    // Context (new API)
+    this.providerStack = []; // Stack of provider objects
+    this.providerIndex = -1;
+  }
+
+  pushProvider<T>(provider: ReactProvider<T>): void {
+    this.providerIndex += 1;
+    this.providerStack[this.providerIndex] = provider;
+    const context: ReactContext<any> = provider.type.context;
+    context.currentValue = provider.props.value;
+  }
+
+  popProvider<T>(provider: ReactProvider<T>): void {
+    if (__DEV__) {
+      warning(
+        this.providerIndex > -1 &&
+          provider === this.providerStack[this.providerIndex],
+        'Unexpected pop.',
+      );
+    }
+    this.providerStack[this.providerIndex] = null;
+    this.providerIndex -= 1;
+    const context: ReactContext<any> = provider.type.context;
+    if (this.providerIndex < 0) {
+      context.currentValue = context.defaultValue;
+    } else {
+      // We assume this type is correct because of the index check above.
+      const previousProvider: ReactProvider<any> = (this.providerStack[
+        this.providerIndex
+      ]: any);
+      context.currentValue = previousProvider.props.value;
+    }
   }
 
   read(bytes: number): string | null {
@@ -591,8 +727,15 @@ class ReactDOMServerRenderer {
           this.previousWasTextNode = false;
         }
         this.stack.pop();
-        if (frame.tag === 'select') {
+        if (frame.type === 'select') {
           this.currentSelectValue = null;
+        } else if (
+          frame.type != null &&
+          frame.type.type != null &&
+          frame.type.type.$$typeof === REACT_PROVIDER_TYPE
+        ) {
+          const provider: ReactProvider<any> = (frame.type: any);
+          this.popProvider(provider);
         }
         continue;
       }
@@ -651,6 +794,7 @@ class ReactDOMServerRenderer {
         }
         const nextChildren = toArray(nextChild);
         const frame: Frame = {
+          type: null,
           domNamespace: parentNamespace,
           children: nextChildren,
           childIndex: 0,
@@ -666,12 +810,20 @@ class ReactDOMServerRenderer {
       // Safe because we just checked it's an element.
       const nextElement = ((nextChild: any): ReactElement);
       const elementType = nextElement.type;
+
+      if (typeof elementType === 'string') {
+        return this.renderDOM(nextElement, context, parentNamespace);
+      }
+
       switch (elementType) {
-        case REACT_FRAGMENT_TYPE:
+        case REACT_STRICT_MODE_TYPE:
+        case REACT_ASYNC_MODE_TYPE:
+        case REACT_FRAGMENT_TYPE: {
           const nextChildren = toArray(
             ((nextChild: any): ReactElement).props.children,
           );
           const frame: Frame = {
+            type: null,
             domNamespace: parentNamespace,
             children: nextChildren,
             childIndex: 0,
@@ -683,6 +835,7 @@ class ReactDOMServerRenderer {
           }
           this.stack.push(frame);
           return '';
+        }
         case REACT_CALL_TYPE:
         case REACT_RETURN_TYPE:
           invariant(
@@ -692,8 +845,83 @@ class ReactDOMServerRenderer {
           );
         // eslint-disable-next-line-no-fallthrough
         default:
-          return this.renderDOM(nextElement, context, parentNamespace);
+          break;
       }
+      if (typeof elementType === 'object' && elementType !== null) {
+        switch (elementType.$$typeof) {
+          case REACT_PROVIDER_TYPE: {
+            const provider: ReactProvider<any> = (nextChild: any);
+            const nextProps = provider.props;
+            const nextChildren = toArray(nextProps.children);
+            const frame: Frame = {
+              type: provider,
+              domNamespace: parentNamespace,
+              children: nextChildren,
+              childIndex: 0,
+              context: context,
+              footer: '',
+            };
+            if (__DEV__) {
+              ((frame: any): FrameDev).debugElementStack = [];
+            }
+
+            this.pushProvider(provider);
+
+            this.stack.push(frame);
+            return '';
+          }
+          case REACT_CONTEXT_TYPE: {
+            const consumer: ReactConsumer<any> = (nextChild: any);
+            const nextProps: any = consumer.props;
+            const nextValue = consumer.type.currentValue;
+
+            const nextChildren = toArray(nextProps.children(nextValue));
+            const frame: Frame = {
+              type: nextChild,
+              domNamespace: parentNamespace,
+              children: nextChildren,
+              childIndex: 0,
+              context: context,
+              footer: '',
+            };
+            if (__DEV__) {
+              ((frame: any): FrameDev).debugElementStack = [];
+            }
+            this.stack.push(frame);
+            return '';
+          }
+          default:
+            break;
+        }
+      }
+
+      let info = '';
+      if (__DEV__) {
+        const owner = nextElement._owner;
+        if (
+          elementType === undefined ||
+          (typeof elementType === 'object' &&
+            elementType !== null &&
+            Object.keys(elementType).length === 0)
+        ) {
+          info +=
+            ' You likely forgot to export your component from the file ' +
+            "it's defined in, or you might have mixed up default and " +
+            'named imports.';
+        }
+        const ownerName = owner ? getComponentName(owner) : null;
+        if (ownerName) {
+          info += '\n\nCheck the render method of `' + ownerName + '`.';
+        }
+      }
+      invariant(
+        false,
+        'Element type is invalid: expected a string (for built-in ' +
+          'components) or a class/function (for composite components) ' +
+          'but got: %s.%s',
+        elementType == null ? elementType : typeof elementType,
+        info,
+      );
     }
   }
 
@@ -980,7 +1208,7 @@ class ReactDOMServerRenderer {
     }
     const frame = {
       domNamespace: getChildNamespace(parentNamespace, element.type),
-      tag,
+      type: tag,
       children,
       childIndex: 0,
       context: context,

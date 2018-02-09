@@ -17,6 +17,7 @@ let createReactClass;
 
 describe('create-react-class-integration', () => {
   beforeEach(() => {
+    jest.resetModules();
     PropTypes = require('prop-types');
     React = require('react');
     ReactDOM = require('react-dom');
@@ -151,6 +152,22 @@ describe('create-react-class-integration', () => {
     );
   });
 
+  it('should warn when misspelling UNSAFE_componentWillReceiveProps', () => {
+    expect(() =>
+      createReactClass({
+        UNSAFE_componentWillRecieveProps: function() {
+          return false;
+        },
+        render: function() {
+          return <div />;
+        },
+      }),
+    ).toWarnDev(
+      'Warning: A component has a method called UNSAFE_componentWillRecieveProps(). ' +
+        'Did you mean UNSAFE_componentWillReceiveProps()?',
+    );
+  });
+
   it('should throw if a reserved property is in statics', () => {
     expect(function() {
       createReactClass({
@@ -175,7 +192,6 @@ describe('create-react-class-integration', () => {
   });
 
   // TODO: Consider actually moving these to statics or drop this unit test.
-
   xit('should warn when using deprecated non-static spec keys', () => {
     expect(() =>
       createReactClass({
@@ -246,6 +262,23 @@ describe('create-react-class-integration', () => {
         return <span />;
       },
     });
+    let instance = <Component />;
+    instance = ReactTestUtils.renderIntoDocument(instance);
+    expect(instance.state.occupation).toEqual('clown');
+  });
+
+  it('should work with getDerivedStateFromProps() return values', () => {
+    const Component = createReactClass({
+      getInitialState() {
+        return {};
+      },
+      render: function() {
+        return <span />;
+      },
+    });
+    Component.getDerivedStateFromProps = () => {
+      return {occupation: 'clown'};
+    };
     let instance = <Component />;
     instance = ReactTestUtils.renderIntoDocument(instance);
     expect(instance.state.occupation).toEqual('clown');
@@ -346,85 +379,149 @@ describe('create-react-class-integration', () => {
     expect(ops).toEqual(['Render: 0', 'Render: 1', 'Callback: 1']);
   });
 
-  it('isMounted works', () => {
-    const ops = [];
-    let instance;
+  it('getDerivedStateFromProps updates state when props change', () => {
     const Component = createReactClass({
-      displayName: 'MyComponent',
-      mixins: [
-        {
-          componentWillMount() {
-            this.log('mixin.componentWillMount');
-          },
-          componentDidMount() {
-            this.log('mixin.componentDidMount');
-          },
-          componentWillUpdate() {
-            this.log('mixin.componentWillUpdate');
-          },
-          componentDidUpdate() {
-            this.log('mixin.componentDidUpdate');
-          },
-          componentWillUnmount() {
-            this.log('mixin.componentWillUnmount');
-          },
-        },
-      ],
-      log(name) {
-        ops.push(`${name}: ${this.isMounted()}`);
-      },
       getInitialState() {
-        this.log('getInitialState');
-        return {};
-      },
-      componentWillMount() {
-        this.log('componentWillMount');
-      },
-      componentDidMount() {
-        this.log('componentDidMount');
-      },
-      componentWillUpdate() {
-        this.log('componentWillUpdate');
-      },
-      componentDidUpdate() {
-        this.log('componentDidUpdate');
-      },
-      componentWillUnmount() {
-        this.log('componentWillUnmount');
+        return {
+          count: 1,
+        };
       },
       render() {
-        instance = this;
-        this.log('render');
-        return <div />;
+        return <div>count:{this.state.count}</div>;
       },
+    });
+    Component.getDerivedStateFromProps = (nextProps, prevState) => ({
+      count: prevState.count + nextProps.incrementBy,
     });
 
     const container = document.createElement('div');
-
-    expect(() => ReactDOM.render(<Component />, container)).toWarnDev(
-      'Warning: MyComponent: isMounted is deprecated. Instead, make sure to ' +
-        'clean up subscriptions and pending requests in componentWillUnmount ' +
-        'to prevent memory leaks.',
+    const instance = ReactDOM.render(
+      <div>
+        <Component incrementBy={0} />
+      </div>,
+      container,
     );
+    expect(instance.textContent).toEqual('count:1');
+    ReactDOM.render(
+      <div>
+        <Component incrementBy={2} />
+      </div>,
+      container,
+    );
+    expect(instance.textContent).toEqual('count:3');
+  });
 
-    ReactDOM.render(<Component />, container);
-    ReactDOM.unmountComponentAtNode(container);
-    instance.log('after unmount');
-    expect(ops).toEqual([
-      'getInitialState: false',
-      'mixin.componentWillMount: false',
-      'componentWillMount: false',
-      'render: false',
-      'mixin.componentDidMount: true',
-      'componentDidMount: true',
-      'mixin.componentWillUpdate: true',
-      'componentWillUpdate: true',
-      'render: true',
-      'mixin.componentDidUpdate: true',
-      'componentDidUpdate: true',
-      'mixin.componentWillUnmount: true',
-      'componentWillUnmount: true',
-      'after unmount: false',
+  it('should support the new static getDerivedStateFromProps method', () => {
+    let instance;
+    const Component = createReactClass({
+      statics: {
+        getDerivedStateFromProps: function() {
+          return {foo: 'bar'};
+        },
+      },
+
+      getInitialState() {
+        return {};
+      },
+
+      render: function() {
+        instance = this;
+        return null;
+      },
+    });
+    ReactDOM.render(<Component />, document.createElement('div'));
+    expect(instance.state.foo).toBe('bar');
+  });
+
+  it('should warn if state is not properly initialized before getDerivedStateFromProps', () => {
+    const Component = createReactClass({
+      statics: {
+        getDerivedStateFromProps: function() {
+          return null;
+        },
+      },
+      render: function() {
+        return null;
+      },
+    });
+    expect(() =>
+      ReactDOM.render(<Component />, document.createElement('div')),
+    ).toWarnDev('Did not properly initialize state during construction.');
+  });
+
+  it('should not invoke deprecated lifecycles (cWM/cWRP/cWU) if new static gDSFP is present', () => {
+    const Component = createReactClass({
+      statics: {
+        getDerivedStateFromProps: function() {
+          return null;
+        },
+      },
+      componentWillMount: function() {
+        throw Error('unexpected');
+      },
+      componentWillReceiveProps: function() {
+        throw Error('unexpected');
+      },
+      componentWillUpdate: function() {
+        throw Error('unexpected');
+      },
+      getInitialState: function() {
+        return {};
+      },
+      render: function() {
+        return null;
+      },
+    });
+
+    expect(() => {
+      ReactDOM.render(<Component />, document.createElement('div'));
+    }).toWarnDev('Defines both componentWillReceiveProps');
+    ReactDOM.render(<Component foo={1} />, document.createElement('div'));
+  });
+
+  it('should invoke both deprecated and new lifecycles if both are present', () => {
+    const log = [];
+
+    const Component = createReactClass({
+      mixins: [
+        {
+          componentWillMount: function() {
+            log.push('componentWillMount');
+          },
+          componentWillReceiveProps: function() {
+            log.push('componentWillReceiveProps');
+          },
+          componentWillUpdate: function() {
+            log.push('componentWillUpdate');
+          },
+        },
+      ],
+      UNSAFE_componentWillMount: function() {
+        log.push('UNSAFE_componentWillMount');
+      },
+      UNSAFE_componentWillReceiveProps: function() {
+        log.push('UNSAFE_componentWillReceiveProps');
+      },
+      UNSAFE_componentWillUpdate: function() {
+        log.push('UNSAFE_componentWillUpdate');
+      },
+      render: function() {
+        return null;
+      },
+    });
+
+    const div = document.createElement('div');
+    ReactDOM.render(<Component foo="bar" />, div);
+    expect(log).toEqual(['componentWillMount', 'UNSAFE_componentWillMount']);
+
+    log.length = 0;
+
+    ReactDOM.render(<Component foo="baz" />, div);
+    expect(log).toEqual([
+      'componentWillReceiveProps',
+      'UNSAFE_componentWillReceiveProps',
+      'componentWillUpdate',
+      'UNSAFE_componentWillUpdate',
     ]);
   });
 });

@@ -34,8 +34,10 @@ const forks = Object.freeze({
     switch (entry) {
       case 'react-native-renderer':
         return 'shared/forks/ReactFeatureFlags.native.js';
-      case 'react-cs-renderer':
-        return 'shared/forks/ReactFeatureFlags.native-cs.js';
+      case 'react-native-renderer/fabric':
+        return 'shared/forks/ReactFeatureFlags.native-fabric.js';
+      case 'react-reconciler/persistent':
+        return 'shared/forks/ReactFeatureFlags.persistent.js';
       default:
         switch (bundleType) {
           case FB_DEV:
@@ -91,7 +93,6 @@ const forks = Object.freeze({
       case RN_PROD:
         switch (entry) {
           case 'react-native-renderer':
-          case 'react-rt-renderer':
             // Use the RN fork which plays well with redbox.
             return 'react-reconciler/src/forks/ReactFiberErrorDialog.native.js';
           default:

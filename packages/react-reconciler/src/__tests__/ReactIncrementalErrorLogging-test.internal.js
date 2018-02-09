@@ -11,11 +11,14 @@
 'use strict';
 
 let React;
+let ReactFeatureFlags;
 let ReactNoop;
 
 describe('ReactIncrementalErrorLogging', () => {
   beforeEach(() => {
     jest.resetModules();
+    ReactFeatureFlags = require('shared/ReactFeatureFlags');
+    ReactFeatureFlags.debugRenderPhaseSideEffectsForStrictMode = false;
     React = require('react');
     ReactNoop = require('react-noop-renderer');
   });
@@ -26,7 +29,7 @@ describe('ReactIncrementalErrorLogging', () => {
     spyOnProd(console, 'error');
 
     class ErrorThrowingComponent extends React.Component {
-      componentWillMount() {
+      UNSAFE_componentWillMount() {
         const error = new Error('componentWillMount error');
         // Note: it's `true` on the Error prototype our test environment.
         // That lets us avoid asserting on warnings for each expected error.

@@ -165,7 +165,7 @@ describe('ReactComponentLifeCycle', () => {
   // had provided a getInitialState method.
   it('throws when accessing state in componentWillMount', () => {
     class StatefulComponent extends React.Component {
-      componentWillMount() {
+      UNSAFE_componentWillMount() {
         void this.state.yada;
       }
 
@@ -182,7 +182,7 @@ describe('ReactComponentLifeCycle', () => {
 
   it('should allow update state inside of componentWillMount', () => {
     class StatefulComponent extends React.Component {
-      componentWillMount() {
+      UNSAFE_componentWillMount() {
         this.setState({stateField: 'something'});
       }
 
@@ -231,7 +231,7 @@ describe('ReactComponentLifeCycle', () => {
         // reaching into the updater.
         return this.updater.isMounted(this);
       }
-      componentWillMount() {
+      UNSAFE_componentWillMount() {
         expect(this._isMounted()).toBeFalsy();
       }
       componentDidMount() {
@@ -258,7 +258,7 @@ describe('ReactComponentLifeCycle', () => {
         // reaching into the updater.
         return this.updater.isMounted(this);
       }
-      componentWillMount() {
+      UNSAFE_componentWillMount() {
         expect(this._isMounted()).toBeFalsy();
       }
       componentDidMount() {
@@ -334,7 +334,7 @@ describe('ReactComponentLifeCycle', () => {
         this.state = initState;
       }
 
-      componentWillMount() {
+      UNSAFE_componentWillMount() {
         this._testJournal.stateAtStartOfWillMount = clone(this.state);
         this._testJournal.lifeCycleAtStartOfWillMount = getLifeCycleState(this);
         this.state.hasWillMountCompleted = true;
@@ -499,7 +499,7 @@ describe('ReactComponentLifeCycle', () => {
     expect(instance.state.stateField).toBe('goodbye');
   });
 
-  it('should call nested lifecycle methods in the right order', () => {
+  it('should call nested legacy lifecycle methods in the right order', () => {
     let log;
     const logger = function(msg) {
       return function() {
@@ -509,11 +509,13 @@ describe('ReactComponentLifeCycle', () => {
       };
     };
     class Outer extends React.Component {
-      componentWillMount = logger('outer componentWillMount');
+      UNSAFE_componentWillMount = logger('outer componentWillMount');
       componentDidMount = logger('outer componentDidMount');
-      componentWillReceiveProps = logger('outer componentWillReceiveProps');
+      UNSAFE_componentWillReceiveProps = logger(
+        'outer componentWillReceiveProps',
+      );
       shouldComponentUpdate = logger('outer shouldComponentUpdate');
-      componentWillUpdate = logger('outer componentWillUpdate');
+      UNSAFE_componentWillUpdate = logger('outer componentWillUpdate');
       componentDidUpdate = logger('outer componentDidUpdate');
       componentWillUnmount = logger('outer componentWillUnmount');
       render() {
@@ -526,11 +528,13 @@ describe('ReactComponentLifeCycle', () => {
     }
 
     class Inner extends React.Component {
-      componentWillMount = logger('inner componentWillMount');
+      UNSAFE_componentWillMount = logger('inner componentWillMount');
       componentDidMount = logger('inner componentDidMount');
-      componentWillReceiveProps = logger('inner componentWillReceiveProps');
+      UNSAFE_componentWillReceiveProps = logger(
+        'inner componentWillReceiveProps',
+      );
       shouldComponentUpdate = logger('inner shouldComponentUpdate');
-      componentWillUpdate = logger('inner componentWillUpdate');
+      UNSAFE_componentWillUpdate = logger('inner componentWillUpdate');
       componentDidUpdate = logger('inner componentDidUpdate');
       componentWillUnmount = logger('inner componentWillUnmount');
       render() {
@@ -540,7 +544,7 @@ describe('ReactComponentLifeCycle', () => {
 
     const container = document.createElement('div');
     log = [];
-    ReactDOM.render(<Outer x={17} />, container);
+    ReactDOM.render(<Outer x={1} />, container);
     expect(log).toEqual([
       'outer componentWillMount',
       'inner componentWillMount',
@@ -548,8 +552,9 @@ describe('ReactComponentLifeCycle', () => {
       'outer componentDidMount',
     ]);
 
+    // Dedup warnings
     log = [];
-    ReactDOM.render(<Outer x={42} />, container);
+    ReactDOM.render(<Outer x={2} />, container);
     expect(log).toEqual([
       'outer componentWillReceiveProps',
       'outer shouldComponentUpdate',
@@ -569,6 +574,131 @@ describe('ReactComponentLifeCycle', () => {
     ]);
   });
 
+  it('should call nested new lifecycle methods in the right order', () => {
+    let log;
+    const logger = function(msg) {
+      return function() {
+        // return true for shouldComponentUpdate
+        log.push(msg);
+        return true;
+      };
+    };
+    class Outer extends React.Component {
+      state = {};
+      static getDerivedStateFromProps(props, prevState) {
+        log.push('outer getDerivedStateFromProps');
+        return null;
+      }
+      componentDidMount = logger('outer componentDidMount');
+      shouldComponentUpdate = logger('outer shouldComponentUpdate');
+      componentDidUpdate = logger('outer componentDidUpdate');
+      componentWillUnmount = logger('outer componentWillUnmount');
+      render() {
+        return (
+          <div>
+            <Inner x={this.props.x} />
+          </div>
+        );
+      }
+    }
+
+    class Inner extends React.Component {
+      state = {};
+      static getDerivedStateFromProps(props, prevState) {
+        log.push('inner getDerivedStateFromProps');
+        return null;
+      }
+      componentDidMount = logger('inner componentDidMount');
+      shouldComponentUpdate = logger('inner shouldComponentUpdate');
+      componentDidUpdate = logger('inner componentDidUpdate');
+      componentWillUnmount = logger('inner componentWillUnmount');
+      render() {
+        return <span>{this.props.x}</span>;
+      }
+    }
+
+    const container = document.createElement('div');
+    log = [];
+    ReactDOM.render(<Outer x={1} />, container);
+    expect(log).toEqual([
+      'outer getDerivedStateFromProps',
+      'inner getDerivedStateFromProps',
+      'inner componentDidMount',
+      'outer componentDidMount',
+    ]);
+
+    // Dedup warnings
+    log = [];
+    ReactDOM.render(<Outer x={2} />, container);
+    expect(log).toEqual([
+      'outer getDerivedStateFromProps',
+      'outer shouldComponentUpdate',
+      'inner getDerivedStateFromProps',
+      'inner shouldComponentUpdate',
+      'inner componentDidUpdate',
+      'outer componentDidUpdate',
+    ]);
+
+    log = [];
+    ReactDOM.unmountComponentAtNode(container);
+    expect(log).toEqual([
+      'outer componentWillUnmount',
+      'inner componentWillUnmount',
+    ]);
+  });
+
+  it('should not invoke deprecated lifecycles (cWM/cWRP/cWU) if new static gDSFP is present', () => {
+    class Component extends React.Component {
+      state = {};
+      static getDerivedStateFromProps() {
+        return null;
+      }
+      componentWillMount() {
+        throw Error('unexpected');
+      }
+      componentWillReceiveProps() {
+        throw Error('unexpected');
+      }
+      componentWillUpdate() {
+        throw Error('unexpected');
+      }
+      render() {
+        return null;
+      }
+    }
+
+    const container = document.createElement('div');
+    expect(() => ReactDOM.render(<Component />, container)).toWarnDev(
+      'Defines both componentWillReceiveProps',
+    );
+  });
+
+  it('should not invoke new unsafe lifecycles (cWM/cWRP/cWU) if static gDSFP is present', () => {
+    class Component extends React.Component {
+      state = {};
+      static getDerivedStateFromProps() {
+        return null;
+      }
+      UNSAFE_componentWillMount() {
+        throw Error('unexpected');
+      }
+      UNSAFE_componentWillReceiveProps() {
+        throw Error('unexpected');
+      }
+      UNSAFE_componentWillUpdate() {
+        throw Error('unexpected');
+      }
+      render() {
+        return null;
+      }
+    }
+
+    const container = document.createElement('div');
+    expect(() => ReactDOM.render(<Component />, container)).toWarnDev(
+      'Defines both componentWillReceiveProps',
+    );
+  });
+
   it('calls effects on module-pattern component', function() {
     const log = [];
 
@@ -579,7 +709,7 @@ describe('ReactComponentLifeCycle', () => {
           log.push('render');
           return <Child />;
         },
-        componentWillMount() {
+        UNSAFE_componentWillMount() {
           log.push('will mount');
         },
         componentDidMount() {
@@ -617,6 +747,87 @@ describe('ReactComponentLifeCycle', () => {
       'render',
       'did update',
       'ref',
+    ]);
+  });
+
+  it('should warn if getDerivedStateFromProps returns undefined', () => {
+    class MyComponent extends React.Component {
+      state = {};
+      static getDerivedStateFromProps() {}
+      render() {
+        return null;
+      }
+    }
+
+    const div = document.createElement('div');
+    expect(() => ReactDOM.render(<MyComponent />, div)).toWarnDev(
+      'MyComponent.getDerivedStateFromProps(): A valid state object (or null) must ' +
+        'be returned. You have returned undefined.',
+    );
+
+    // De-duped
+    ReactDOM.render(<MyComponent />, div);
+  });
+
+  it('should warn if state is not initialized before getDerivedStateFromProps', () => {
+    class MyComponent extends React.Component {
+      static getDerivedStateFromProps() {
+        return null;
+      }
+      render() {
+        return null;
+      }
+    }
+
+    const div = document.createElement('div');
+    expect(() => ReactDOM.render(<MyComponent />, div)).toWarnDev(
+      'MyComponent: Did not properly initialize state during construction. ' +
+        'Expected state to be an object, but it was undefined.',
+    );
+
+    // De-duped
+    ReactDOM.render(<MyComponent />, div);
+  });
+
+  it('should invoke both deprecated and new lifecycles if both are present', () => {
+    const log = [];
+
+    class MyComponent extends React.Component {
+      componentWillMount() {
+        log.push('componentWillMount');
+      }
+      componentWillReceiveProps() {
+        log.push('componentWillReceiveProps');
+      }
+      componentWillUpdate() {
+        log.push('componentWillUpdate');
+      }
+      UNSAFE_componentWillMount() {
+        log.push('UNSAFE_componentWillMount');
+      }
+      UNSAFE_componentWillReceiveProps() {
+        log.push('UNSAFE_componentWillReceiveProps');
+      }
+      UNSAFE_componentWillUpdate() {
+        log.push('UNSAFE_componentWillUpdate');
+      }
+      render() {
+        return null;
+      }
+    }
+
+    const div = document.createElement('div');
+    ReactDOM.render(<MyComponent foo="bar" />, div);
+    expect(log).toEqual(['componentWillMount', 'UNSAFE_componentWillMount']);
+
+    log.length = 0;
+
+    ReactDOM.render(<MyComponent foo="baz" />, div);
+    expect(log).toEqual([
+      'componentWillReceiveProps',
+      'UNSAFE_componentWillReceiveProps',
+      'componentWillUpdate',
+      'UNSAFE_componentWillUpdate',
     ]);
   });
 });
